@@ -1,482 +1,256 @@
-// Multi-Agent Debate System with Groq AI
+// Multi-Agent Debate System
+// Three agents with distinct perspectives debate an arbitrage opportunity:
+//   Bull Agent  — focuses on profit potential and opportunity cost
+//   Bear Agent  — focuses on execution risk and spread decay
+//   Mediator    — synthesises both and gives final recommendation
+//
+// Uses Groq (llama-3.3-70b-versatile) with OpenRouter and NVIDIA as fallbacks.
 
-import Groq from 'groq-sdk';
+import type { Opportunity } from "@/lib/arbitrage/detector";
+import type { RiskAssessmentResult } from "@/lib/agents/riskAssessment";
+import type { AllocationResult } from "@/lib/agents/capitalAllocation";
 
-export interface AgentArgument {
-  agentName: string;
-  role: 'price_discovery' | 'risk_assessment' | 'capital_allocation' | 'execution' | 'market_analyst';
-  stance: 'bullish' | 'bearish' | 'neutral';
-  confidence: number; // 0-1
-  reasoning: string;
-  evidence: any[];
-  timestamp: Date;
-}
-
-export interface DebateRound {
-  roundNumber: number;
-  arguments: AgentArgument[];
-  consensus?: 'proceed' | 'abort' | 'needs_more_data';
-  timestamp: Date;
-}
-
-export interface DebateSession {
-  sessionId: string;
-  topic: string; // e.g., "Execute BTC/USDT arbitrage between Binance and WazirX"
-  rounds: DebateRound[];
-  finalDecision?: 'proceed' | 'abort';
-  finalConsensus?: number; // 0-1
-  participants: string[];
-  startTime: Date;
-  endTime?: Date;
-}
-
-// In-memory debate sessions storage
-const debateSessions: Map<string, DebateSession> = new Map();
-
-// Initialize Groq client (API key from environment)
-let groqClient: Groq | null = null;
-
-function getGroqClient(): Groq | null {
-  if (groqClient) return groqClient;
-  
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    console.warn('GROQ_API_KEY not set. Debate agent will use fallback reasoning.');
-    return null;
-  }
-  
-  groqClient = new Groq({ apiKey });
-  return groqClient;
-}
-
-/**
- * Generate bullish argument using Groq API
- */
-async function generateBullishArgument(
-  topic: string,
-  context: any
-): Promise<AgentArgument> {
-  const client = getGroqClient();
-  
-  let reasoning: string;
-  let confidence: number;
-  
-  if (client) {
-    try {
-      const prompt = `You are a bullish market analyst evaluating an arbitrage opportunity.
-
-Topic: ${topic}
-
-Context:
-- Symbol: ${context.symbol || 'BTC/USDT'}
-- Buy Exchange: ${context.buyExchange || 'Binance'}
-- Sell Exchange: ${context.sellExchange || 'WazirX'}
-- Buy Price: $${context.buyPrice || 50000}
-- Sell Price: $${context.sellPrice || 50750}
-- Spread: ${context.spread || 1.5}%
-- Risk Score: ${context.riskScore || 0.3}/1.0
-
-Provide a BULLISH argument for why this arbitrage trade SHOULD be executed. Focus on:
-1. Profit potential and spread size
-2. Market conditions favoring the trade
-3. Execution feasibility
-4. Opportunity cost of NOT taking the trade
-
-Keep your response to 3-4 concise bullet points. Be specific and data-driven.`;
-
-      const completion = await client.chat.completions.create({
-        model: 'llama-3.1-70b-versatile',
-        messages: [{
-          role: 'user',
-          content: prompt
-        }],
-        temperature: 0.7,
-        max_tokens: 300
-      });
-      
-      reasoning = completion.choices[0]?.message?.content || 'No reasoning provided';
-      
-      // Calculate confidence based on spread and risk
-      confidence = Math.min(0.9, (context.spread || 1) / 2 * (1 - (context.riskScore || 0.3)));
-      
-    } catch (error) {
-      console.error('Groq API error (bullish):', error);
-      reasoning = fallbackBullishReasoning(context);
-      confidence = 0.6;
-    }
-  } else {
-    reasoning = fallbackBullishReasoning(context);
-    confidence = 0.6;
-  }
-  
-  return {
-    agentName: 'Bullish Analyst',
-    role: 'market_analyst',
-    stance: 'bullish',
-    confidence,
-    reasoning,
-    evidence: [context],
-    timestamp: new Date()
-  };
-}
-
-/**
- * Generate bearish argument using Groq API
- */
-async function generateBearishArgument(
-  topic: string,
-  context: any
-): Promise<AgentArgument> {
-  const client = getGroqClient();
-  
-  let reasoning: string;
-  let confidence: number;
-  
-  if (client) {
-    try {
-      const prompt = `You are a bearish market analyst evaluating an arbitrage opportunity.
-
-Topic: ${topic}
-
-Context:
-- Symbol: ${context.symbol || 'BTC/USDT'}
-- Buy Exchange: ${context.buyExchange || 'Binance'}
-- Sell Exchange: ${context.sellExchange || 'WazirX'}
-- Buy Price: $${context.buyPrice || 50000}
-- Sell Price: $${context.sellPrice || 50750}
-- Spread: ${context.spread || 1.5}%
-- Risk Score: ${context.riskScore || 0.3}/1.0
-- Volatility: ${context.volatility || 'Medium'}
-- Liquidity: ${context.liquidity || 'Good'}
-
-Provide a BEARISH argument for why this arbitrage trade should NOT be executed. Focus on:
-1. Risks and potential pitfalls
-2. Execution challenges (slippage, fees, timing)
-3. Market conditions that could erode profit
-4. Better alternative opportunities
-
-Keep your response to 3-4 concise bullet points. Be specific and data-driven.`;
-
-      const completion = await client.chat.completions.create({
-        model: 'llama-3.1-70b-versatile',
-        messages: [{
-          role: 'user',
-          content: prompt
-        }],
-        temperature: 0.7,
-        max_tokens: 300
-      });
-      
-      reasoning = completion.choices[0]?.message?.content || 'No reasoning provided';
-      
-      // Calculate confidence based on risk factors
-      confidence = Math.min(0.9, (context.riskScore || 0.3) + 0.3);
-      
-    } catch (error) {
-      console.error('Groq API error (bearish):', error);
-      reasoning = fallbackBearishReasoning(context);
-      confidence = 0.6;
-    }
-  } else {
-    reasoning = fallbackBearishReasoning(context);
-    confidence = 0.6;
-  }
-  
-  return {
-    agentName: 'Bearish Analyst',
-    role: 'market_analyst',
-    stance: 'bearish',
-    confidence,
-    reasoning,
-    evidence: [context],
-    timestamp: new Date()
-  };
-}
-
-/**
- * Fallback bullish reasoning (when API unavailable)
- */
-function fallbackBullishReasoning(context: any): string {
-  const spread = context.spread || 1.5;
-  const risk = context.riskScore || 0.3;
-  
-  return `• Strong ${spread.toFixed(2)}% spread provides healthy profit margin above fees and slippage
-• Low risk score (${(risk * 100).toFixed(0)}%) indicates stable market conditions
-• Both exchanges have sufficient liquidity for smooth execution
-• Time-sensitive opportunity - spread may narrow if not acted upon quickly`;
-}
-
-/**
- * Fallback bearish reasoning (when API unavailable)
- */
-function fallbackBearishReasoning(context: any): string {
-  const risk = context.riskScore || 0.3;
-  
-  return `• Execution across two exchanges introduces timing risk and potential for slippage
-• ${(risk * 100).toFixed(0)}% risk score suggests market volatility could erode gains
-• Transaction fees and withdrawal fees will reduce net profit significantly
-• Spread may be artificially wide due to temporary liquidity imbalance`;
-}
-
-/**
- * Initialize a new debate session
- */
-export async function startDebate(
-  topic: string,
-  context: any
-): Promise<DebateSession> {
-  const sessionId = `DEBATE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
-  const session: DebateSession = {
-    sessionId,
-    topic,
-    rounds: [],
-    participants: ['Bullish Analyst', 'Bearish Analyst', 'Risk Assessor', 'Execution Agent'],
-    startTime: new Date()
-  };
-  
-  debateSessions.set(sessionId, session);
-  
-  return session;
-}
-
-/**
- * Conduct a single round of debate
- * Generates both bullish and bearish arguments using Groq
- */
-export async function conductDebateRound(
-  session: DebateSession,
-  context: any
-): Promise<DebateRound> {
-  const roundNumber = session.rounds.length + 1;
-  
-  // Generate both perspectives in parallel
-  const [bullishArg, bearishArg] = await Promise.all([
-    generateBullishArgument(session.topic, context),
-    generateBearishArgument(session.topic, context)
-  ]);
-  
-  const args: AgentArgument[] = [bullishArg, bearishArg];
-  
-  // Determine consensus based on argument strengths
-  let consensus: 'proceed' | 'abort' | 'needs_more_data';
-  
-  const bullishWeight = bullishArg.confidence;
-  const bearishWeight = bearishArg.confidence;
-  const netSentiment = bullishWeight - bearishWeight;
-  
-  if (Math.abs(netSentiment) < 0.2) {
-    consensus = 'needs_more_data';
-  } else if (netSentiment > 0) {
-    consensus = 'proceed';
-  } else {
-    consensus = 'abort';
-  }
-  
-  const round: DebateRound = {
-    roundNumber,
-    arguments: args,
-    consensus,
-    timestamp: new Date()
-  };
-  
-  session.rounds.push(round);
-  
-  return round;
-}
-
-/**
- * Reach final consensus from debate
- */
-export async function reachConsensus(
-  session: DebateSession
-): Promise<{
-  decision: 'proceed' | 'abort';
-  confidence: number;
-  explanation: string;
-}> {
-  if (session.rounds.length === 0) {
-    return {
-      decision: 'abort',
-      confidence: 0,
-      explanation: 'No debate rounds conducted'
-    };
-  }
-  
-  // Aggregate all arguments
-  let totalBullish = 0;
-  let totalBearish = 0;
-  let countBullish = 0;
-  let countBearish = 0;
-  
-  for (const round of session.rounds) {
-    for (const arg of round.arguments) {
-      if (arg.stance === 'bullish') {
-        totalBullish += arg.confidence;
-        countBullish++;
-      } else if (arg.stance === 'bearish') {
-        totalBearish += arg.confidence;
-        countBearish++;
-      }
-    }
-  }
-  
-  const avgBullish = countBullish > 0 ? totalBullish / countBullish : 0;
-  const avgBearish = countBearish > 0 ? totalBearish / countBearish : 0;
-  
-  const netSentiment = avgBullish - avgBearish;
-  const decision: 'proceed' | 'abort' = netSentiment > 0 ? 'proceed' : 'abort';
-  const confidence = Math.abs(netSentiment);
-  
-  let explanation = '';
-  if (decision === 'proceed') {
-    explanation = `After ${session.rounds.length} round(s) of analysis, the bullish case is stronger. `;
-    explanation += `Bullish confidence: ${(avgBullish * 100).toFixed(1)}%, `;
-    explanation += `Bearish confidence: ${(avgBearish * 100).toFixed(1)}%. `;
-    explanation += `Recommendation: Proceed with trade execution.`;
-  } else {
-    explanation = `After ${session.rounds.length} round(s) of analysis, the bearish case is stronger. `;
-    explanation += `Bearish confidence: ${(avgBearish * 100).toFixed(1)}%, `;
-    explanation += `Bullish confidence: ${(avgBullish * 100).toFixed(1)}%. `;
-    explanation += `Recommendation: Abort trade to avoid potential losses.`;
-  }
-  
-  session.finalDecision = decision;
-  session.finalConsensus = confidence;
-  session.endTime = new Date();
-  
-  return {
-    decision,
-    confidence,
-    explanation
-  };
-}
-
-/**
- * Get debate history for visualization
- */
-export async function getDebateHistory(sessionId: string): Promise<DebateSession | null> {
-  return debateSessions.get(sessionId) || null;
-}
-
-/**
- * Quick debate for immediate decision
- * Runs one round and returns consensus
- */
-export async function quickDebate(
-  topic: string,
-  context: any
-): Promise<{
-  decision: 'proceed' | 'abort';
-  confidence: number;
-  explanation: string;
-  bullishReasoning: string;
-  bearishReasoning: string;
-}> {
-  const session = await startDebate(topic, context);
-  const round = await conductDebateRound(session, context);
-  const consensus = await reachConsensus(session);
-  
-  const bullishArg = round.arguments.find(a => a.stance === 'bullish');
-  const bearishArg = round.arguments.find(a => a.stance === 'bearish');
-  
-  return {
-    ...consensus,
-    bullishReasoning: bullishArg?.reasoning || 'No bullish argument',
-    bearishReasoning: bearishArg?.reasoning || 'No bearish argument'
-  };
-}
-
-export interface AgentPerspective {
-  score: number; // 0-1
-  reasons: string[];
-}
+// ─── Types ──────────────────────────────────────────────────────────────
 
 export interface DebateResult {
-  bullish: AgentPerspective;
-  bearish: AgentPerspective;
-  neutral: AgentPerspective;
-  finalDecisionScore: number;
-  decision: 'execute' | 'wait';
-  raw: string;
+  verdict: "execute" | "skip";
+  confidence: number; // 0-100
+  reasoning: string;
+  riskNotes: string[];
+  bullArgs: string;
+  bearArgs: string;
+  mediatorArgs: string;
 }
+
+// ─── LLM helpers ────────────────────────────────────────────────────────
+
+interface LLMProvider {
+  name: string;
+  url: string;
+  model: string;
+  apiKey: string | undefined;
+  headers: () => Record<string, string>;
+}
+
+function getProviders(): LLMProvider[] {
+  return [
+    {
+      name: "groq",
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      model: "llama-3.3-70b-versatile",
+      apiKey: process.env.GROK_KEY,
+      headers() {
+        return {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        };
+      },
+    },
+    {
+      name: "openrouter",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      model: "meta-llama/llama-3.3-70b-instruct",
+      apiKey: process.env.OPENROUTER_API_KEY,
+      headers() {
+        return {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+          "HTTP-Referer":
+            process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+        };
+      },
+    },
+    {
+      name: "nvidia",
+      url: "https://integrate.api.nvidia.com/v1/chat/completions",
+      model: "meta/llama-3.1-70b-instruct",
+      apiKey: process.env.NVIDIA_KEY,
+      headers() {
+        return {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        };
+      },
+    },
+  ].filter((p) => !!p.apiKey);
+}
+
+async function callLLM(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const providers = getProviders();
+
+  for (const provider of providers) {
+    try {
+      const res = await fetch(provider.url, {
+        method: "POST",
+        headers: provider.headers(),
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.4,
+          max_tokens: 500,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) {
+        console.warn(`[debate] ${provider.name} returned ${res.status}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (content) return content;
+    } catch (err) {
+      console.warn(`[debate] ${provider.name} error:`, err);
+    }
+  }
+
+  return ""; // all providers failed — fallback will be used
+}
+
+// ─── Agent System Prompts ───────────────────────────────────────────────
+
+const BULL_SYSTEM = `You are the BULL AGENT in a crypto arbitrage trading system.
+Your role is to argue FOR executing the trade. Focus on:
+- The profit opportunity and spread size
+- Historical reliability of similar cross-exchange spreads
+- Exchange reliability and uptime
+- Opportunity cost of NOT taking this trade
+- Speed advantage if executed quickly
+
+Be specific, data-driven, and concise (3-4 bullet points). Do NOT use markdown headers.`;
+
+const BEAR_SYSTEM = `You are the BEAR AGENT in a crypto arbitrage trading system.
+Your role is to argue AGAINST executing the trade. Focus on:
+- Execution risk: slippage, withdrawal delays, network congestion
+- Spread decay: how quickly the arbitrage window closes
+- Exchange-specific risks: withdrawal limits, KYC holds, maintenance
+- Fee underestimation: hidden fees, network gas costs
+- Regulatory risk for cross-exchange transfers
+
+Be specific, data-driven, and concise (3-4 bullet points). Do NOT use markdown headers.`;
+
+const MEDIATOR_SYSTEM = `You are the MEDIATOR AGENT in a crypto arbitrage trading system.
+You have read the Bull and Bear arguments. Your job is to:
+1. Weigh both sides fairly
+2. Give a FINAL VERDICT: "execute" or "skip"
+3. Assign a confidence score from 0-100
+4. List key risk notes
+
+Respond ONLY in this exact JSON format (no other text):
+{"verdict":"execute"|"skip","confidence":<0-100>,"reasoning":"<1 sentence>","riskNotes":["<note1>","<note2>"]}`;
+
+// ─── Public API ─────────────────────────────────────────────────────────
 
 /**
- * Conduct debate with median consensus using Groq llama-3.3-70b-versatile
+ * Run a 3-agent debate on a specific opportunity.
  */
-export async function debateWithMedianConsensus(
-  opportunity: any,
-  risk: any,
-  allocation: any,
-  executeConfidenceThreshold: number = 0.6
+export async function debateOpportunity(
+  opp: Opportunity,
+  risk: RiskAssessmentResult,
+  allocation: AllocationResult,
 ): Promise<DebateResult> {
-  const client = getGroqClient();
-  
-  if (!client) {
-    return fallbackDebateResult(opportunity, risk, allocation, executeConfidenceThreshold);
-  }
+  const context = `
+Symbol: ${opp.symbol}
+Buy from: ${opp.buyExchange} at $${opp.buyPrice.toFixed(2)}
+Sell on: ${opp.sellExchange} at $${opp.sellPrice.toFixed(2)}
+Gross spread: ${opp.grossSpreadPct.toFixed(3)}%
+Net spread (after fees): ${opp.netSpreadPct.toFixed(3)}%
+Estimated fees: ${opp.estimatedFeePct.toFixed(3)}%
+Risk score: ${risk.riskScore}/100 (${risk.riskLevel})
+Spread-to-fee ratio: ${risk.spreadToFeeRatio.toFixed(2)}
+Suggested allocation: $${allocation.allocatedUsd.toFixed(2)} (${allocation.allocationPct}%)
+Expected profit on allocation: $${((allocation.allocatedUsd * opp.netSpreadPct) / 100).toFixed(2)}
+`.trim();
+
+  // Run bull and bear in parallel
+  const [bullRaw, bearRaw] = await Promise.all([
+    callLLM(BULL_SYSTEM, `Evaluate this arbitrage opportunity:\n${context}`),
+    callLLM(BEAR_SYSTEM, `Evaluate this arbitrage opportunity:\n${context}`),
+  ]);
+
+  const bullArgs = bullRaw || fallbackBull(opp, risk);
+  const bearArgs = bearRaw || fallbackBear(opp, risk);
+
+  // Mediator sees both arguments
+  const mediatorPrompt = `
+OPPORTUNITY:
+${context}
+
+BULL ARGUMENT:
+${bullArgs}
+
+BEAR ARGUMENT:
+${bearArgs}
+
+Give your final verdict as JSON.`;
+
+  const mediatorRaw = await callLLM(MEDIATOR_SYSTEM, mediatorPrompt);
+  let mediatorArgs = mediatorRaw;
+
+  // Parse mediator JSON
+  let verdict: "execute" | "skip" = "skip";
+  let confidence = 50;
+  let reasoning = "Unable to reach consensus";
+  let riskNotes: string[] = [];
 
   try {
-    const prompt = `You are a multi-agent trading system evaluating an arbitrage opportunity.
-
-OPPORTUNITY: Symbol ${opportunity.symbol}, Spread ${opportunity.spreadPct}%, Profit ${opportunity.estimatedGrossProfitPct}%
-RISK: Score ${risk.riskScore}/100, Slippage ${risk.slippagePct}%, Volatility ${risk.volatilityPct}%
-ALLOCATION: ${allocation.allocationPct * 100}%, $${allocation.allocatedUSDT}
-
-Provide THREE agent perspectives in STRICT JSON format:
-{
-  "bullish": {"score": <0-1>, "reasons": ["reason 1", "reason 2", "reason 3"]},
-  "bearish": {"score": <0-1>, "reasons": ["reason 1", "reason 2", "reason 3"]},
-  "neutral": {"score": <0-1>, "reasons": ["reason 1", "reason 2"]}
-}
-Respond ONLY with JSON, no other text.`;
-
-    const completion = await client.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 600
+    const jsonMatch = mediatorRaw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      verdict = parsed.verdict === "execute" ? "execute" : "skip";
+      confidence = Math.max(0, Math.min(100, parsed.confidence ?? 50));
+      reasoning = parsed.reasoning || reasoning;
+      riskNotes = Array.isArray(parsed.riskNotes) ? parsed.riskNotes : [];
+    }
+  } catch {
+    // Fallback: use risk score to decide
+    verdict =
+      risk.riskScore < 50 && opp.netSpreadPct > 0.1 ? "execute" : "skip";
+    confidence = Math.round(100 - risk.riskScore);
+    reasoning = `Fallback decision based on risk score ${risk.riskScore}/100`;
+    riskNotes = risk.factors.map((f) => f.desc);
+    mediatorArgs = JSON.stringify({
+      verdict,
+      confidence,
+      reasoning,
+      riskNotes,
     });
-
-    const raw = completion.choices[0]?.message?.content || '{}';
-    const jsonMatch = raw.match(/{[\s\S]*}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
-
-    const bullish: AgentPerspective = {
-      score: Math.max(0, Math.min(1, parsed.bullish.score || 0)),
-      reasons: Array.isArray(parsed.bullish.reasons) ? parsed.bullish.reasons.slice(0, 3) : []
-    };
-    const bearish: AgentPerspective = {
-      score: Math.max(0, Math.min(1, parsed.bearish.score || 0)),
-      reasons: Array.isArray(parsed.bearish.reasons) ? parsed.bearish.reasons.slice(0, 3) : []
-    };
-    const neutral: AgentPerspective = {
-      score: Math.max(0, Math.min(1, parsed.neutral.score || 0)),
-      reasons: Array.isArray(parsed.neutral.reasons) ? parsed.neutral.reasons.slice(0, 2) : []
-    };
-
-    const scores = [bullish.score, 1 - bearish.score, neutral.score];
-    scores.sort((a, b) => a - b);
-    const finalDecisionScore = scores[1];
-
-    return {
-      bullish, bearish, neutral,
-      finalDecisionScore,
-      decision: finalDecisionScore >= executeConfidenceThreshold ? 'execute' : 'wait',
-      raw
-    };
-  } catch (error) {
-    return fallbackDebateResult(opportunity, risk, allocation, executeConfidenceThreshold);
   }
+
+  return {
+    verdict,
+    confidence,
+    reasoning,
+    riskNotes,
+    bullArgs,
+    bearArgs,
+    mediatorArgs,
+  };
 }
 
-function fallbackDebateResult(o: any, r: any, a: any, t: number): DebateResult {
-  const spreadScore = Math.min(1, o.spreadPct / 3);
-  const riskPenalty = r.riskScore / 100;
-  const bullish = { score: Math.max(0, Math.min(1, spreadScore - riskPenalty * 0.3)), reasons: [`Spread ${o.spreadPct.toFixed(2)}%`, `Allocated $${a.allocatedUSDT}`, `Time-sensitive`] };
-  const bearish = { score: Math.max(0, Math.min(1, riskPenalty)), reasons: [`Risk ${r.riskScore}/100`, `Slippage ${r.slippagePct.toFixed(2)}%`, `Volatility risk`] };
-  const neutral = { score: 0.5, reasons: [`Balanced risk-reward`, `Conservative allocation`] };
-  const scores = [bullish.score, 1 - bearish.score, neutral.score];
-  scores.sort((a, b) => a - b);
-  return { bullish, bearish, neutral, finalDecisionScore: scores[1], decision: scores[1] >= t ? 'execute' : 'wait', raw: 'Fallback' };
+// ─── Fallbacks ──────────────────────────────────────────────────────────
+
+function fallbackBull(opp: Opportunity, risk: RiskAssessmentResult): string {
+  return [
+    `• ${opp.netSpreadPct.toFixed(3)}% net spread after fees provides a real profit margin.`,
+    `• Buying on ${opp.buyExchange} and selling on ${opp.sellExchange} are both major, liquid exchanges.`,
+    `• Spread-to-fee ratio of ${risk.spreadToFeeRatio.toFixed(2)}x means fees are well covered.`,
+    `• Delaying risks losing the window — arbitrage spreads can close in seconds.`,
+  ].join("\n");
+}
+
+function fallbackBear(opp: Opportunity, risk: RiskAssessmentResult): string {
+  return [
+    `• Execution across two exchanges means timing risk — prices can change mid-transfer.`,
+    `• Risk score of ${risk.riskScore}/100 indicates ${risk.riskLevel} risk level.`,
+    `• Hidden costs (withdrawal fees, network gas, slippage) may erode the ${opp.grossSpreadPct.toFixed(3)}% spread.`,
+    `• Cross-exchange arbitrage requires pre-funded accounts on both sides.`,
+  ].join("\n");
 }
