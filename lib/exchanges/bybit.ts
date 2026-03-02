@@ -1,10 +1,16 @@
 // Bybit Exchange Adapter
 // Endpoint: GET https://api.bybit.com/v5/market/tickers?category=spot
 // Symbols format: BTCUSDT
+// Note: api.bybit.com can be geo-restricted from some cloud IPs.
+// api.bytick.com is Bybit's official alternative hostname.
 
 import { ExchangeAdapter, PriceData } from "./types";
 
-const BASE = "https://api.bybit.com/v5/market";
+// Bybit official hostnames — try in order
+const BYBIT_HOSTS = [
+  "https://api.bybit.com",
+  "https://api.bytick.com",
+];
 
 interface BybitTicker {
   symbol: string;
@@ -22,12 +28,30 @@ interface BybitResponse {
   };
 }
 
+async function fetchWithFallback(path: string): Promise<Response> {
+  let lastError: unknown;
+  for (const host of BYBIT_HOSTS) {
+    try {
+      const res = await fetch(`${host}${path}`, {
+        signal: AbortSignal.timeout(8000),
+        cache: "no-store",
+      });
+      if (res.status === 403 || res.status === 451) {
+        console.warn(`[bybit] ${host} returned ${res.status}, trying next host`);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[bybit] ${host} failed:`, err);
+    }
+  }
+  throw lastError ?? new Error("All Bybit hosts failed");
+}
+
 async function fetchPrices(symbols: string[]): Promise<PriceData[]> {
   try {
-    const res = await fetch(`${BASE}/tickers?category=spot`, {
-      signal: AbortSignal.timeout(8000),
-      cache: "no-store",
-    });
+    const res = await fetchWithFallback("/v5/market/tickers?category=spot");
     if (!res.ok) throw new Error(`Bybit HTTP ${res.status}`);
 
     const data: BybitResponse = await res.json();
