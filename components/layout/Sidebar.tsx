@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   Zap,
   LogOut,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLayout } from "@/context/LayoutContext";
@@ -20,6 +21,7 @@ import { useSession, signOut } from "@/lib/auth-client";
 const navItems = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Scan & Analyze", href: "/arbitrage", icon: ScanSearch },
+  { name: "Trade", href: "/trade", icon: ArrowRightLeft },
   { name: "Portfolio", href: "/portfolio", icon: Wallet },
   { name: "Agents", href: "/agents", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },

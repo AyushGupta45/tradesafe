@@ -1,13 +1,13 @@
 # TradeSafe
 
-AI-powered cryptocurrency arbitrage platform. Detects price spreads across 6 exchanges, runs a multi-agent debate (Bull / Bear / Mediator) via LLM, and simulates execution — all in real time.
+AI-powered cryptocurrency arbitrage platform. Detects price spreads across 5 exchanges, runs a multi-agent debate (Bull / Bear / Mediator) via LLM, and simulates execution — all in real time.
 
 ## Architecture
 
 ```
 Next.js 14 (App Router)  →  Drizzle ORM  →  Neon PostgreSQL
         ↓
-  6 Exchange Adapters (Binance, Kraken, KuCoin, Bybit, OKX, Gate.io)
+  5 Exchange Adapters (Binance, Kraken, KuCoin, Bybit, Gate.io)
         ↓
   Price Discovery  →  Arbitrage Detector  →  Risk Assessment
         ↓
@@ -22,43 +22,75 @@ Next.js 14 (App Router)  →  Drizzle ORM  →  Neon PostgreSQL
 - **Auth:** BetterAuth (email/password + Google OAuth)
 - **Database:** Neon PostgreSQL via Drizzle ORM
 - **UI:** shadcn/ui primitives, Lucide icons, next-themes (dark/light)
+- **Charts:** Recharts (portfolio P&L, allocation pie, mini price sparklines)
 - **LLM:** Cascading fallback — Groq → OpenRouter → NVIDIA (Llama 3 70B)
 
 ## Pages
 
-| Route               | Description                               |
-| ------------------- | ----------------------------------------- |
-| `/`                 | Landing page                              |
-| `/login`, `/signup` | Authentication                            |
-| `/dashboard`        | Portfolio stats, recent scans             |
-| `/arbitrage`        | Scan → prices → debate → execute workflow |
-| `/portfolio`        | Holdings and simulated trade history      |
-| `/agents`           | Agent activity and debate history         |
-| `/settings`         | Watchlist and guardian risk parameters    |
+| Route        | Description                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------- |
+| `/`          | Landing page                                                                                    |
+| `/login`     | Email/password or Google OAuth login                                                            |
+| `/signup`    | Account creation                                                                                |
+| `/dashboard` | Portfolio stats, live watchlist tickers with 24h change/volume, recent scan activity            |
+| `/arbitrage` | **Scan & Analyze** tab: live scan → AI debate → execute; **History** tab: past scans with stats |
+| `/trade`     | Manual trading — symbol search, live order books from 5 exchanges, AI debate, P&L estimator     |
+| `/portfolio` | Holdings, full trade history, analytics panel (win rate, drawdown, profit factor)               |
+| `/agents`    | Agent roster with descriptions and full debate history                                          |
+| `/settings`  | Watchlist symbols and Guardian risk thresholds                                                  |
 
 ## API Routes
 
-| Method  | Route                        | Description                             |
-| ------- | ---------------------------- | --------------------------------------- |
-| POST    | `/api/scan`                  | Trigger price scan across all exchanges |
-| POST    | `/api/scan/[scanId]/debate`  | Run 3-agent debate on an opportunity    |
-| POST    | `/api/scan/[scanId]/execute` | Simulate trade execution                |
-| GET     | `/api/scans`                 | List user's past scans                  |
-| GET     | `/api/debates`               | List user's debate history              |
-| GET     | `/api/trades`                | List user's simulated trades            |
-| GET     | `/api/portfolio`             | Get portfolio holdings                  |
-| GET/PUT | `/api/settings/watchlist`    | Manage watchlist symbols                |
-| GET/PUT | `/api/settings/guardian`     | Manage risk guardian parameters         |
+### Arbitrage Pipeline
+
+| Method | Route                        | Description                                    |
+| ------ | ---------------------------- | ---------------------------------------------- |
+| POST   | `/api/scan`                  | Trigger live price scan across all 5 exchanges |
+| POST   | `/api/scan/demo`             | Demo scan — real prices, synthetic opportunity |
+| POST   | `/api/scan/[scanId]/debate`  | Run 3-agent LLM debate on an opportunity       |
+| POST   | `/api/scan/[scanId]/execute` | Simulate arbitrage execution, persist to DB    |
+| GET    | `/api/scans`                 | List user's past scans                         |
+| GET    | `/api/scans/history`         | Enriched scan history with hit-rate stats      |
+
+### Manual Trading
+
+| Method | Route                      | Description                                             |
+| ------ | -------------------------- | ------------------------------------------------------- |
+| GET    | `/api/orderbook`           | Live order books (bid/ask ladders) from all 5 exchanges |
+| GET    | `/api/symbols`             | Dynamic tradeable symbol list pulled from Binance       |
+| GET    | `/api/klines`              | OHLCV kline data for mini price sparkline charts        |
+| POST   | `/api/trade-debate`        | AI debate on a manual trade before execution            |
+| POST   | `/api/scan/execute-manual` | Execute a manual buy/sell and update portfolio in DB    |
+
+### Portfolio & Watchlist
+
+| Method | Route                      | Description                                                     |
+| ------ | -------------------------- | --------------------------------------------------------------- |
+| GET    | `/api/portfolio`           | Portfolio summary (cash, PnL, trade count)                      |
+| GET    | `/api/portfolio/detailed`  | Full holdings — assets, open positions, trade list              |
+| GET    | `/api/portfolio/analytics` | Win rate, avg profit, max drawdown, profit factor, best/worst   |
+| GET    | `/api/watchlist`           | Get user's watchlist symbols                                    |
+| PUT    | `/api/watchlist`           | Update watchlist symbols                                        |
+| GET    | `/api/watchlist/prices`    | Live price tickers for watchlist (24h change, high/low, volume) |
+
+### Settings & Misc
+
+| Method  | Route                     | Description                     |
+| ------- | ------------------------- | ------------------------------- |
+| GET     | `/api/debates`            | List user's debate history      |
+| GET     | `/api/trades`             | List user's simulated trades    |
+| GET/PUT | `/api/settings/watchlist` | Manage watchlist symbols        |
+| GET/PUT | `/api/settings/guardian`  | Manage Guardian risk parameters |
+| POST    | `/api/admin/seed`         | Insert demo data via HTTP       |
 
 ## Exchange Adapters
 
-All 6 adapters share a common `ExchangeAdapter` interface and are called in parallel via `Promise.allSettled`:
+All adapters share a common `ExchangeAdapter` interface and are called in parallel via `Promise.allSettled` — a single failing exchange never blocks a scan:
 
 - **Binance** — Book ticker API (bid/ask/mid)
 - **Kraken** — Public ticker API
 - **KuCoin** — All tickers endpoint
 - **Bybit** — v5 spot tickers
-- **OKX** — Spot tickers (with `aws.okx.com` fallback for geo-blocked regions)
 - **Gate.io** — Spot tickers
 
 ## Agent Pipeline
@@ -67,9 +99,21 @@ All 6 adapters share a common `ExchangeAdapter` interface and are called in para
 2. **Arbitrage Detector** — Filter opportunities by minimum net spread (>0.05%)
 3. **Risk Assessment** — Score risk factors (spread volatility, exchange reliability, etc.)
 4. **Guardian Check** — Veto trades that exceed user-configured risk thresholds
-5. **Capital Allocation** — Determine position size based on risk tier
-6. **AI Debate** — Bull, Bear, and Mediator agents argue via LLM; mediator renders verdict
-7. **Simulated Execution** — Model slippage, fill prices, fees; update portfolio in DB
+5. **Capital Allocation** — Tiered position sizing (extreme → 2%, high → 5%, medium → 10%, low → 15%)
+6. **AI Debate** — Bull, Bear, and Mediator agents argue via LLM; mediator renders verdict + confidence score
+7. **Simulated Execution** — Models slippage (0.01–0.05%), fee deduction; persists result to portfolio DB
+
+## Key UI Components
+
+| Component                                | Description                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `components/spread-heatmap.tsx`          | Grid heatmap of bid/ask spreads across all exchange pairs             |
+| `components/exchange-health.tsx`         | Live status badges showing latency and reachability per exchange      |
+| `components/charts/mini-price-chart.tsx` | Inline kline sparkline rendered on the trade page                     |
+| `components/trade-panel.tsx`             | Trade form with real-time P&L estimator using live order book depth   |
+| Portfolio analytics panel                | KPI cards — win rate, avg profit, max drawdown, profit factor         |
+| Dashboard watchlist                      | Live 24h price rows with change %, high/low, volume, quick-trade link |
+| Arbitrage History tab                    | Paginated scan log with per-scan opportunity, trade, and profit stats |
 
 ## Setup
 
@@ -82,6 +126,9 @@ cp "sample .env.local" .env.local
 
 # Push database schema
 npm run db:push
+
+# Seed demo data (optional — requires at least one registered account)
+npm run db:seed
 
 # Start development server
 npm run dev
@@ -107,10 +154,10 @@ npm run dev
 
 - `user`, `session`, `account`, `verification` — BetterAuth core
 - `watchlist` — Per-user symbol watchlist
-- `scan` — Scan results with raw prices and opportunities
+- `scan` — Scan results with raw prices and opportunities JSON
 - `debate` — AI debate transcripts and verdicts
-- `simulatedTrade` — Execution simulation results
-- `portfolio` — User holdings (cash + positions)
+- `simulatedTrade` — Execution results for both arbitrage and manual trades
+- `portfolio` — User cash balance, total PnL, trade count
 - `guardianSettings` — Per-user risk thresholds
 
 ```bash
@@ -122,4 +169,18 @@ npm run db:push
 
 # Open Drizzle Studio
 npm run db:studio
+
+# Seed realistic demo data (7 scans, 18 trades, ~$308 PnL)
+npm run db:seed
 ```
+
+## Demo Walkthrough
+
+After running `npm run db:seed` (register an account first):
+
+1. **Dashboard** — watchlist tickers update live; portfolio shows seeded PnL and trade count
+2. **Arbitrage → History** — 7 past scans with hit-rate, opportunity count, and profit aggregates
+3. **Arbitrage → Scan & Analyze** — click _Demo Scan_ to run the full pipeline with a synthetic opportunity, then _Debate_ → _Execute_
+4. **Trade** — search a symbol (e.g. `BTC`), view live order books across 5 exchanges, run AI debate, inspect P&L estimator before submitting
+5. **Portfolio** — allocation pie chart, KPI analytics panel, full trade log with arbitrage and manual trades
+6. **Agents** — full debate history with Bull / Bear / Mediator arguments, verdicts, and confidence scores

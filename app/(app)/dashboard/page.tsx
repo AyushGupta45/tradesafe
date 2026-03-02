@@ -10,6 +10,10 @@ import {
   Loader2,
   Clock,
   ArrowRight,
+  ArrowUpRight,
+  ArrowDownRight,
+  Star,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -27,12 +31,24 @@ interface Scan {
   triggeredAt: string;
 }
 
+interface WatchlistTicker {
+  symbol: string;
+  price: number;
+  change24h: number;
+  changePercent24h: number;
+  high24h: number;
+  low24h: number;
+  volume24h: number;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [scans, setScans] = useState<Scan[]>([]);
   const [scanning, setScanning] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [tickers, setTickers] = useState<WatchlistTicker[]>([]);
+  const [tickersLoading, setTickersLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     try {
@@ -52,9 +68,25 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchWatchlistPrices = useCallback(async () => {
+    setTickersLoading(true);
+    try {
+      const res = await fetch("/api/watchlist/prices");
+      if (res.ok) {
+        const data = await res.json();
+        setTickers(data.tickers ?? []);
+      }
+    } catch {
+      // non-critical
+    } finally {
+      setTickersLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+    fetchWatchlistPrices();
+  }, [fetchData, fetchWatchlistPrices]);
 
   const handleScan = async () => {
     setScanning(true);
@@ -136,6 +168,119 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Watchlist */}
+      <div className="rounded-lg border bg-card">
+        <div className="p-4 border-b flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Star className="w-4 h-4 text-yellow-500" />
+            <h2 className="font-semibold">Watchlist</h2>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={fetchWatchlistPrices}
+            disabled={tickersLoading}
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${tickersLoading ? "animate-spin" : ""}`}
+            />
+          </Button>
+        </div>
+        {tickersLoading && tickers.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+            Fetching live prices…
+          </div>
+        ) : tickers.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            No watchlist data available.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-muted-foreground text-left">
+                  <th className="px-4 py-2 font-medium">Symbol</th>
+                  <th className="px-4 py-2 font-medium text-right">Price</th>
+                  <th className="px-4 py-2 font-medium text-right">
+                    24h Change
+                  </th>
+                  <th className="px-4 py-2 font-medium text-right">24h High</th>
+                  <th className="px-4 py-2 font-medium text-right">24h Low</th>
+                  <th className="px-4 py-2 font-medium text-right">Volume</th>
+                  <th className="px-4 py-2 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {tickers.map((t) => {
+                  const isUp = t.changePercent24h >= 0;
+                  return (
+                    <tr
+                      key={t.symbol}
+                      className="hover:bg-accent/50 transition-colors"
+                    >
+                      <td className="px-4 py-2.5 font-medium">
+                        {t.symbol.replace(/USDT$/, "")}
+                        <span className="text-muted-foreground">/USDT</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono font-medium">
+                        $
+                        {t.price.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <span
+                          className={`inline-flex items-center gap-0.5 font-medium ${isUp ? "text-emerald-500" : "text-red-500"}`}
+                        >
+                          {isUp ? (
+                            <ArrowUpRight className="w-3 h-3" />
+                          ) : (
+                            <ArrowDownRight className="w-3 h-3" />
+                          )}
+                          {isUp ? "+" : ""}
+                          {t.changePercent24h.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted-foreground">
+                        $
+                        {t.high24h.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted-foreground">
+                        $
+                        {t.low24h.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted-foreground">
+                        ${(t.volume24h / 1_000_000).toFixed(1)}M
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() =>
+                            router.push(`/trade?symbol=${t.symbol}`)
+                          }
+                        >
+                          Trade
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Recent Scans */}
       <div className="rounded-lg border bg-card">
         <div className="p-4 border-b flex items-center justify-between">
@@ -149,7 +294,7 @@ export default function DashboardPage() {
             <ScanSearch className="w-8 h-8 mx-auto mb-2 opacity-40" />
             <p className="text-sm">
               No scans yet. Click &quot;New Scan&quot; to detect arbitrage
-              opportunities across 6 exchanges.
+              opportunities across 5 exchanges.
             </p>
           </div>
         ) : (

@@ -136,6 +136,10 @@ export const simulatedTrade = pgTable("simulated_trade", {
   grossProfit: real("gross_profit").notNull(),
   fees: real("fees").notNull(),
   netProfit: real("net_profit").notNull(),
+  type: text("type").notNull().default("arbitrage"), // arbitrage | manual
+  side: text("side").notNull().default("buy"), // buy | sell
+  status: text("status").notNull().default("filled"), // filled | pending | cancelled
+  realizedPnl: real("realized_pnl").notNull().default(0),
   executedAt: timestamp("executed_at").notNull().defaultNow(),
 });
 
@@ -149,6 +153,9 @@ export const portfolio = pgTable("portfolio", {
   cashBalance: real("cash_balance").notNull().default(100000),
   totalPnl: real("total_pnl").notNull().default(0),
   tradeCount: integer("trade_count").notNull().default(0),
+  avgEntryPrice: json("avg_entry_price")
+    .$type<Record<string, number>>()
+    .default({}),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

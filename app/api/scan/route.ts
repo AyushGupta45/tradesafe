@@ -1,7 +1,7 @@
 // POST /api/scan — Trigger a new price scan
 // 1. Validate session
 // 2. Read user watchlist from DB (or use default)
-// 3. Fetch prices from all 6 exchanges
+// 3. Fetch prices from all 5 exchanges
 // 4. Detect arbitrage opportunities
 // 5. Store scan in DB
 // 6. Return scan ID + opportunities

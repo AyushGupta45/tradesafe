@@ -16,7 +16,7 @@ const agents = [
   {
     name: "Price Discovery",
     description:
-      "Fetches real-time bid/ask from Binance, Kraken, KuCoin, Bybit, OKX, Gate.io using Promise.allSettled for resilience.",
+      "Fetches real-time bid/ask from Binance, Kraken, KuCoin, Bybit, Gate.io using Promise.allSettled for resilience.",
     icon: TrendingUp,
     color: "text-blue-500",
     bgColor: "bg-blue-500/10",

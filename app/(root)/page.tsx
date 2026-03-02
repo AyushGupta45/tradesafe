@@ -18,8 +18,8 @@ import { Button } from "@/components/ui/button";
 const features = [
   {
     icon: Globe,
-    title: "6 Live Exchanges",
-    desc: "Fetches real-time prices from Binance, Kraken, KuCoin, Bybit, OKX, and Gate.io simultaneously.",
+    title: "5 Live Exchanges",
+    desc: "Fetches real-time prices from Binance, Kraken, KuCoin, Bybit, and Gate.io simultaneously.",
   },
   {
     icon: Bot,
@@ -141,7 +141,7 @@ export default function LandingPage() {
           <h2 className="text-3xl font-bold">Ready to explore arbitrage?</h2>
           <p className="text-muted-foreground max-w-md mx-auto">
             Sign up in seconds and start scanning across Binance, Kraken,
-            KuCoin, Bybit, OKX, and Gate.io.
+            KuCoin, Bybit, and Gate.io.
           </p>
           <Link href={session?.user ? "/dashboard" : "/signup"}>
             <Button size="lg">
@@ -158,7 +158,7 @@ export default function LandingPage() {
             <Zap className="w-4 h-4 text-primary" />
             <span className="font-medium text-foreground">TradeSafe</span>
           </div>
-          <p>Built for Mumbai Hacks 2024</p>
+          <p>Built for Mumbai Hacks 2025</p>
         </div>
       </footer>
     </div>

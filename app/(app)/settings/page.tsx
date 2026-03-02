@@ -2,12 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { User, Shield, Eye, Save, Loader2, Plus, X, Check } from "lucide-react";
+import { User, Shield, Eye, Save, Loader2, Check } from "lucide-react";
 import { useSession, signOut } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SUPPORTED_COINS } from "@/constants";
+import { SymbolSearch } from "@/components/symbol-search";
 
 interface GuardianSettings {
   maxTradePercent: number;
@@ -95,14 +95,6 @@ export default function SettingsPage() {
     setTimeout(() => setGSaved(false), 2000);
   };
 
-  const toggleSymbol = (symbol: string) => {
-    setWatchlist((prev) =>
-      prev.includes(symbol)
-        ? prev.filter((s) => s !== symbol)
-        : [...prev, symbol],
-    );
-  };
-
   const handleSignOut = async () => {
     await signOut();
     router.push("/login");
@@ -167,25 +159,11 @@ export default function SettingsPage() {
         {wlLoading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {SUPPORTED_COINS.map((coin) => {
-              const active = watchlist.includes(coin.symbol);
-              return (
-                <button
-                  key={coin.symbol}
-                  onClick={() => toggleSymbol(coin.symbol)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                    active
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-muted/50 text-muted-foreground border-transparent hover:bg-muted"
-                  }`}
-                >
-                  {coin.baseAsset}
-                  {active && <span className="ml-1">✓</span>}
-                </button>
-              );
-            })}
-          </div>
+          <SymbolSearch
+            selected={watchlist}
+            onSelectionChange={setWatchlist}
+            maxSelections={20}
+          />
         )}
       </div>
 
