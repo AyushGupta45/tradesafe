@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   ScanSearch,
@@ -22,8 +22,24 @@ import {
   ArrowRight,
   Clock,
   Zap,
+  Rewind,
+  DollarSign,
+  Activity,
+  Percent,
+  Calendar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Line,
+  ComposedChart,
+} from "recharts";
 
 interface Opportunity {
   id: string;
@@ -105,6 +121,43 @@ interface ScanHistoryRecord {
   durationMs: number | null;
 }
 
+interface BacktestResult {
+  symbols: string[];
+  durationDays: number;
+  startTime: string;
+  endTime: string;
+  totalSnapshots: number;
+  totalOpportunities: number;
+  avgNetSpreadPct: number;
+  maxNetSpreadPct: number;
+  totalEstimatedProfit: number;
+  opportunitiesByHour: {
+    hour: string;
+    count: number;
+    avgSpread: number;
+    bestSpread: number;
+  }[];
+  topOpportunities: (Opportunity & { snapshotTime: string })[];
+  exchangePairStats: {
+    buyExchange: string;
+    sellExchange: string;
+    count: number;
+    avgSpread: number;
+    totalEstimatedProfit: number;
+  }[];
+  liveExchanges: string[];
+  failedExchanges: string[];
+  symbolBreakdown: { symbol: string; oppCount: number; avgSpread: number }[];
+}
+
+const DURATION_OPTIONS = [
+  { label: "1D", days: 1 },
+  { label: "3D", days: 3 },
+  { label: "7D", days: 7 },
+  { label: "14D", days: 14 },
+  { label: "30D", days: 30 },
+];
+
 interface ScanHistoryStats {
   totalScans: number;
   scansWithOpps: number;
@@ -129,7 +182,9 @@ export default function ArbitragePage() {
 function ArbitrageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<"scan" | "history">("scan");
+  const [activeTab, setActiveTab] = useState<"scan" | "history" | "backtest">(
+    "scan",
+  );
   const [historyScans, setHistoryScans] = useState<ScanHistoryRecord[]>([]);
   const [historyStats, setHistoryStats] = useState<ScanHistoryStats | null>(
     null,
@@ -142,6 +197,14 @@ function ArbitrageContent() {
   const [tradeResult, setTradeResult] = useState<TradeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
+
+  // Backtest state
+  const [backtestDuration, setBacktestDuration] = useState(7);
+  const [backtestLoading, setBacktestLoading] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(
+    null,
+  );
+  const [backtestError, setBacktestError] = useState<string | null>(null);
 
   // Load scan from URL param if present
   const loadScan = useCallback(async (scanId: string) => {
@@ -279,6 +342,70 @@ function ArbitrageContent() {
     }
   };
 
+  const runBacktest = async () => {
+    setBacktestLoading(true);
+    setBacktestError(null);
+    setBacktestResult(null);
+
+    try {
+      const res = await fetch("/api/backtest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ durationDays: backtestDuration }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Backtest failed");
+      setBacktestResult(data);
+    } catch (err: any) {
+      setBacktestError(err.message);
+    } finally {
+      setBacktestLoading(false);
+    }
+  };
+
+  // Prepare chart data for backtest (aggregate by day for >3d, else by hour)
+  const backtestChartData = useMemo(() => {
+    if (!backtestResult) return [];
+    const buckets = backtestResult.opportunitiesByHour;
+    if (backtestDuration <= 3) {
+      // Show hourly, but limit to show every 3rd label
+      return buckets.map((b, idx) => ({
+        label: new Date(b.hour).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+        }),
+        opportunities: b.count,
+        avgSpread: parseFloat(b.avgSpread.toFixed(3)),
+      }));
+    }
+    // Aggregate by day for longer periods
+    const dayMap = new Map<
+      string,
+      { count: number; totalSpread: number; entries: number }
+    >();
+    for (const b of buckets) {
+      const dayKey = new Date(b.hour).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+      if (!dayMap.has(dayKey))
+        dayMap.set(dayKey, { count: 0, totalSpread: 0, entries: 0 });
+      const d = dayMap.get(dayKey)!;
+      d.count += b.count;
+      d.totalSpread += b.avgSpread * (b.count || 1);
+      d.entries += b.count || 1;
+    }
+    return Array.from(dayMap.entries()).map(([label, val]) => ({
+      label,
+      opportunities: val.count,
+      avgSpread:
+        val.entries > 0
+          ? parseFloat((val.totalSpread / val.entries).toFixed(3))
+          : 0,
+    }));
+  }, [backtestResult, backtestDuration]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -348,6 +475,17 @@ function ArbitrageContent() {
         >
           <ScanSearch className="w-3.5 h-3.5" />
           Scan &amp; Analyze
+        </button>
+        <button
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            activeTab === "backtest"
+              ? "bg-background shadow text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("backtest")}
+        >
+          <Rewind className="w-3.5 h-3.5" />
+          Backtest
         </button>
         <button
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -851,6 +989,416 @@ function ArbitrageContent() {
             </div>
           )}
         </>
+      )}
+
+      {/* ═══════════════════════════════ Backtest Tab ═══════════════════════════════ */}
+      {activeTab === "backtest" && (
+        <div className="space-y-4">
+          {/* Configuration Panel */}
+          <div className="rounded-lg border bg-card p-5 space-y-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Rewind className="w-4 h-4 text-primary" />
+              <h2 className="font-semibold">Backtest Configuration</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Simulate arbitrage detection over historical data. Select a
+              lookback period and run the backtest to discover what
+              opportunities would have existed.
+            </p>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-muted-foreground">
+                Duration:
+              </span>
+              <div className="flex gap-1.5">
+                {DURATION_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.days}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                      backtestDuration === opt.days
+                        ? "bg-primary text-primary-foreground shadow-md"
+                        : "bg-muted text-muted-foreground hover:text-foreground hover:bg-accent"
+                    }`}
+                    onClick={() => setBacktestDuration(opt.days)}
+                    disabled={backtestLoading}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <Button
+                onClick={runBacktest}
+                disabled={backtestLoading}
+                className="ml-auto"
+              >
+                {backtestLoading ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Rewind className="w-4 h-4 mr-2" />
+                )}
+                {backtestLoading ? "Running..." : "Run Backtest"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Error */}
+          {backtestError && (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+              {backtestError}
+            </div>
+          )}
+
+          {/* Loading */}
+          {backtestLoading && (
+            <div className="rounded-lg border bg-card p-12 text-center space-y-3">
+              <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary" />
+              <p className="font-medium">
+                Fetching {backtestDuration} day{backtestDuration > 1 ? "s" : ""}{" "}
+                of historical data from 5 exchanges...
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Binance · Kraken · KuCoin · Bybit · Gate.io
+              </p>
+              <p className="text-xs text-muted-foreground">
+                This may take a moment — analyzing hourly candles across all
+                exchange pairs
+              </p>
+            </div>
+          )}
+
+          {/* Idle state (no result yet, not loading) */}
+          {!backtestLoading && !backtestResult && !backtestError && (
+            <div className="rounded-lg border bg-card p-12 text-center space-y-3">
+              <Rewind className="w-10 h-10 mx-auto text-muted-foreground" />
+              <h3 className="text-lg font-semibold">Ready to Backtest</h3>
+              <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                Select a lookback duration and click &quot;Run Backtest&quot; to
+                simulate arbitrage detection over historical price data from all
+                5 exchanges.
+              </p>
+            </div>
+          )}
+
+          {/* ─── Backtest Results ─── */}
+          {backtestResult && !backtestLoading && (
+            <div className="space-y-4">
+              {/* Estimation notice */}
+              <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                <Rewind className="w-4 h-4 shrink-0" />
+                <span>
+                  <strong>Historical Estimate</strong> — Bid/ask prices are
+                  approximated from hourly candle low/high. Real opportunities
+                  would likely be ≥ these results. Data from{" "}
+                  {new Date(backtestResult.startTime).toLocaleDateString()} to{" "}
+                  {new Date(backtestResult.endTime).toLocaleDateString()}.
+                </span>
+              </div>
+
+              {/* Exchange status */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-muted-foreground">Data from:</span>
+                {backtestResult.liveExchanges.map((e) => (
+                  <span
+                    key={e}
+                    className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 font-medium"
+                  >
+                    {e}
+                  </span>
+                ))}
+                {backtestResult.failedExchanges.length > 0 && (
+                  <>
+                    <span className="text-muted-foreground ml-2">No data:</span>
+                    {backtestResult.failedExchanges.map((e) => (
+                      <span
+                        key={e}
+                        className="px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium"
+                      >
+                        {e}
+                      </span>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                <StatCard
+                  icon={<Target className="w-4 h-4 text-primary" />}
+                  label="Opportunities"
+                  value={backtestResult.totalOpportunities.toString()}
+                />
+                <StatCard
+                  icon={<BarChart3 className="w-4 h-4 text-blue-500" />}
+                  label="Snapshots"
+                  value={backtestResult.totalSnapshots.toString()}
+                />
+                <StatCard
+                  icon={<Percent className="w-4 h-4 text-emerald-500" />}
+                  label="Avg Spread"
+                  value={`${backtestResult.avgNetSpreadPct.toFixed(3)}%`}
+                  valueColor={
+                    backtestResult.avgNetSpreadPct > 0 ? "text-emerald-500" : ""
+                  }
+                />
+                <StatCard
+                  icon={<TrendingUp className="w-4 h-4 text-emerald-500" />}
+                  label="Max Spread"
+                  value={`${backtestResult.maxNetSpreadPct.toFixed(3)}%`}
+                  valueColor="text-emerald-500"
+                />
+                <StatCard
+                  icon={<DollarSign className="w-4 h-4 text-yellow-500" />}
+                  label="Est. Profit"
+                  value={`$${backtestResult.totalEstimatedProfit.toFixed(2)}`}
+                  valueColor="text-emerald-500"
+                />
+                <StatCard
+                  icon={<Calendar className="w-4 h-4 text-muted-foreground" />}
+                  label="Duration"
+                  value={`${backtestResult.durationDays}d`}
+                />
+              </div>
+
+              {/* Timeline Chart */}
+              {backtestChartData.length > 0 && (
+                <div className="rounded-lg border bg-card p-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Activity className="w-4 h-4 text-muted-foreground" />
+                    <h3 className="font-semibold text-sm">
+                      Opportunities Over Time
+                    </h3>
+                  </div>
+                  <div className="h-[260px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={backtestChartData}>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke="hsl(var(--border))"
+                          opacity={0.5}
+                        />
+                        <XAxis
+                          dataKey="label"
+                          tick={{
+                            fontSize: 10,
+                            fill: "hsl(var(--muted-foreground))",
+                          }}
+                          interval={Math.max(
+                            0,
+                            Math.floor(backtestChartData.length / 12),
+                          )}
+                          angle={-30}
+                          textAnchor="end"
+                          height={50}
+                        />
+                        <YAxis
+                          yAxisId="count"
+                          tick={{
+                            fontSize: 10,
+                            fill: "hsl(var(--muted-foreground))",
+                          }}
+                          allowDecimals={false}
+                          label={{
+                            value: "Count",
+                            angle: -90,
+                            position: "insideLeft",
+                            style: {
+                              fontSize: 10,
+                              fill: "hsl(var(--muted-foreground))",
+                            },
+                          }}
+                        />
+                        <YAxis
+                          yAxisId="spread"
+                          orientation="right"
+                          tick={{
+                            fontSize: 10,
+                            fill: "hsl(var(--muted-foreground))",
+                          }}
+                          label={{
+                            value: "Spread %",
+                            angle: 90,
+                            position: "insideRight",
+                            style: {
+                              fontSize: 10,
+                              fill: "hsl(var(--muted-foreground))",
+                            },
+                          }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--card))",
+                            border: "1px solid hsl(var(--border))",
+                            borderRadius: "8px",
+                            fontSize: "12px",
+                          }}
+                        />
+                        <Bar
+                          yAxisId="count"
+                          dataKey="opportunities"
+                         fill="#3b82f6"
+                          radius={[2, 2, 0, 0]}
+                          opacity={0.8}
+                          name="Opportunities"
+                        />
+                        <Line
+                          yAxisId="spread"
+                          type="monotone"
+                          dataKey="avgSpread"
+                          stroke="hsl(142, 76%, 56%)"
+                          strokeWidth={2}
+                          dot={false}
+                          name="Avg Spread %"
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Symbol Breakdown + Exchange Pair Stats */}
+              <div className="grid md:grid-cols-2 gap-4">
+                {/* Symbol Breakdown */}
+                {backtestResult.symbolBreakdown.length > 0 && (
+                  <div className="rounded-lg border bg-card">
+                    <div className="p-4 border-b">
+                      <h3 className="font-semibold text-sm">By Symbol</h3>
+                    </div>
+                    <div className="divide-y">
+                      {backtestResult.symbolBreakdown.map((s) => (
+                        <div
+                          key={s.symbol}
+                          className="px-4 py-2.5 flex items-center justify-between text-sm"
+                        >
+                          <span
+                            className={`font-medium ${s.oppCount === 0 ? "text-muted-foreground" : ""}`}
+                          >
+                            {s.symbol.replace(/USDT$/, "")}
+                          </span>
+                          <div className="flex items-center gap-3">
+                            <span
+                              className={
+                                s.oppCount > 0
+                                  ? "text-emerald-500 font-medium"
+                                  : "text-muted-foreground"
+                              }
+                            >
+                              {s.oppCount} opp{s.oppCount !== 1 ? "s" : ""}
+                            </span>
+                            {s.oppCount > 0 ? (
+                              <span className="font-mono text-xs text-emerald-500">
+                                {s.avgSpread.toFixed(3)}%
+                              </span>
+                            ) : (
+                              <span className="font-mono text-xs text-muted-foreground">
+                                —
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Exchange Pair Stats */}
+                {backtestResult.exchangePairStats.length > 0 && (
+                  <div className="rounded-lg border bg-card">
+                    <div className="p-4 border-b">
+                      <h3 className="font-semibold text-sm">
+                        By Exchange Pair
+                      </h3>
+                    </div>
+                    <div className="divide-y">
+                      {backtestResult.exchangePairStats
+                        .slice(0, 10)
+                        .map((pair, idx) => (
+                          <div
+                            key={idx}
+                            className="px-4 py-2.5 flex items-center justify-between text-sm"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium capitalize">
+                                {pair.buyExchange}
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-muted-foreground" />
+                              <span className="font-medium capitalize">
+                                {pair.sellExchange}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-muted-foreground">
+                                {pair.count}×
+                              </span>
+                              <span className="font-mono text-xs text-emerald-500">
+                                ~${pair.totalEstimatedProfit.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Top Opportunities */}
+              <div className="rounded-lg border bg-card">
+                <div className="p-4 border-b">
+                  <h2 className="font-semibold">
+                    Top Opportunities (
+                    {Math.min(10, backtestResult.topOpportunities.length)})
+                  </h2>
+                </div>
+                {backtestResult.topOpportunities.length === 0 ? (
+                  <div className="p-8 text-center text-muted-foreground text-sm">
+                    No arbitrage opportunities found in this period. Try a
+                    longer duration or different symbols.
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {backtestResult.topOpportunities.map((opp, i) => (
+                      <div
+                        key={opp.id}
+                        className="px-4 py-3 flex items-center justify-between hover:bg-accent/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="text-center min-w-[44px]">
+                            <p className="text-xs text-muted-foreground">
+                              #{i + 1}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{opp.symbol}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Buy on{" "}
+                              <span className="font-medium text-foreground capitalize">
+                                {opp.buyExchange}
+                              </span>{" "}
+                              → Sell on{" "}
+                              <span className="font-medium text-foreground capitalize">
+                                {opp.sellExchange}
+                              </span>
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(opp.snapshotTime).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-mono font-medium text-emerald-500">
+                            +{opp.netSpreadPct.toFixed(3)}%
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            ~${opp.estimatedProfitUsd.toFixed(2)} on $1k
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* History Tab */}
